@@ -6,29 +6,41 @@
   <title>E4 Väder</title>
   <style>
     body{font-family:system-ui;margin:0;background:#f6f7f9}
-    header{padding:14px 14px 10px;background:#fff;border-bottom:1px solid #e9eaee}
-    h1{font-size:18px;margin:0 0 6px}
-    #u{font-size:12px;color:#666}
+    header{padding:14px;background:#fff;border-bottom:1px solid #e9eaee}
+    h1{font-size:18px;margin:0 0 10px}
+    .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+    input{padding:10px 10px;border:1px solid #ddd;border-radius:10px;font-weight:700}
+    button{border:1px solid #ddd;background:#fff;border-radius:10px;padding:10px 12px;font-weight:800}
+    .small{font-size:12px;color:#666;margin-top:8px}
     .wrap{padding:10px}
     .card{background:#fff;border:1px solid #e9eaee;border-radius:14px;padding:12px;margin:8px 0}
     .top{display:flex;justify-content:space-between;align-items:center;gap:10px}
-    .name{font-weight:800}
-    .pill{font-size:12px;font-weight:800;padding:4px 10px;border-radius:999px}
+    .name{font-weight:900}
+    .pill{font-size:12px;font-weight:900;padding:4px 10px;border-radius:999px}
     .g{background:#e8f7ee;color:#146c2e}
     .y{background:#fff7df;color:#7a5a00}
     .r{background:#ffe8e8;color:#8a1f1f}
-    .meta{margin-top:6px;color:#222}
-    .why{margin-top:6px;font-size:12px;color:#555}
-    button{border:1px solid #ddd;background:#fff;border-radius:10px;padding:8px 10px;font-weight:700}
-    .bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .grid{display:grid;grid-template-columns:1fr;gap:6px;margin-top:8px}
+    .line{font-size:13px;color:#222}
+    .muted{color:#666}
+    .divider{height:1px;background:#f0f0f0;margin:10px 0}
+    .badge{display:inline-block;font-size:11px;font-weight:800;color:#666;background:#f3f4f6;padding:2px 8px;border-radius:999px}
   </style>
 </head>
 <body>
   <header>
     <h1>E4 Skellefteå → Stockholm</h1>
-    <div class="bar">
-      <div id="u">Uppdaterad: –</div>
-      <button onclick="load()">Uppdatera nu</button>
+
+    <div class="row">
+      <input id="start" type="time" value="10:00" />
+      <input id="speed" type="number" value="85" min="30" max="130" step="1" style="width:92px" />
+      <button onclick="load()">Uppdatera</button>
+    </div>
+
+    <div class="small">
+      Starttid (HH:MM) + snitthastighet (km/h) → visar ETA och prognos vid ankomst per punkt.
+      <br>
+      <span id="meta">–</span>
     </div>
   </header>
 
@@ -40,13 +52,20 @@
       if(r==="GUL") return "pill y";
       return "pill g";
     }
+    function fmt(n, d=1){
+      if(typeof n !== "number" || Number.isNaN(n)) return "–";
+      return n.toFixed(d);
+    }
 
     async function load(){
-      const res = await fetch("/api/status", { cache: "no-store" });
+      const start = document.getElementById("start").value || "10:00";
+      const speed = document.getElementById("speed").value || "85";
+
+      const res = await fetch(`/api/status?start=${encodeURIComponent(start)}&speed=${encodeURIComponent(speed)}`, { cache: "no-store" });
       const d = await res.json();
 
-      document.getElementById("u").innerText =
-        "Uppdaterad: " + new Date(d.updated).toLocaleString();
+      document.getElementById("meta").innerText =
+        `Senast data: ${new Date(d.updated).toLocaleString()} · Start: ${new Date(d.start).toLocaleTimeString().slice(0,5)} · Snitt: ${d.speed_kmh} km/h`;
 
       const c = document.getElementById("c");
       c.innerHTML = "";
@@ -54,14 +73,33 @@
       d.points.forEach(p => {
         const el = document.createElement("div");
         el.className = "card";
+
         el.innerHTML = `
           <div class="top">
             <div class="name">${p.name}</div>
-            <div class="${pillClass(p.risk)}">${p.risk}</div>
+            <div class="${pillClass(p.eta.risk)}">${p.eta.risk}</div>
           </div>
-          <div class="meta">${p.t}°C · ${p.p} mm · ${p.w} m/s</div>
-          <div class="why">${p.reason}</div>
+
+          <div class="grid">
+            <div class="line"><span class="badge">NU</span>
+              <span class="muted"> Temp</span> <b>${fmt(p.now.t)}°C</b> ·
+              <span class="muted"> Nederbörd</span> <b>${fmt(p.now.p)} mm</b> ·
+              <span class="muted"> Vind</span> <b>${fmt(p.now.w)} m/s</b>
+            </div>
+
+            <div class="divider"></div>
+
+            <div class="line"><span class="badge">ETA</span>
+              <span class="muted"> Tid</span> <b>${(p.eta.time || "").slice(11,16)}</b> ·
+              <span class="muted"> Temp</span> <b>${fmt(p.eta.t)}°C</b> ·
+              <span class="muted"> Nederbörd</span> <b>${fmt(p.eta.p)} mm</b> ·
+              <span class="muted"> Vind</span> <b>${fmt(p.eta.w)} m/s</b>
+            </div>
+
+            <div class="line muted">Orsak: ${p.eta.reason || "–"}</div>
+          </div>
         `;
+
         c.appendChild(el);
       });
     }
