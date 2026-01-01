@@ -3,16 +3,24 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>E4 Väder</title>
+  <title>Vägväder Dashboard</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
   <style>
     body{font-family:system-ui;margin:0;background:#f6f7f9}
     header{padding:14px;background:#fff;border-bottom:1px solid #e9eaee}
     h1{font-size:18px;margin:0 0 10px}
     .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-    input{padding:10px 10px;border:1px solid #ddd;border-radius:10px;font-weight:700}
-    button{border:1px solid #ddd;background:#fff;border-radius:10px;padding:10px 12px;font-weight:800}
+    input,select{padding:10px;border:1px solid #ddd;border-radius:10px;font-weight:800}
+    button,a.btn{
+      border:1px solid #ddd;background:#fff;border-radius:10px;padding:10px 12px;
+      font-weight:900;text-decoration:none;color:#111;display:inline-block
+    }
     .small{font-size:12px;color:#666;margin-top:8px}
-    .wrap{padding:10px}
+    .layout{padding:10px;display:grid;grid-template-columns:1fr;gap:10px}
+    #map{height:42vh;border:1px solid #e9eaee;border-radius:14px;background:#fff}
     .card{background:#fff;border:1px solid #e9eaee;border-radius:14px;padding:12px;margin:8px 0}
     .top{display:flex;justify-content:space-between;align-items:center;gap:10px}
     .name{font-weight:900}
@@ -24,27 +32,41 @@
     .line{font-size:13px;color:#222}
     .muted{color:#666}
     .divider{height:1px;background:#f0f0f0;margin:10px 0}
-    .badge{display:inline-block;font-size:11px;font-weight:800;color:#666;background:#f3f4f6;padding:2px 8px;border-radius:999px}
+    .badge{display:inline-block;font-size:11px;font-weight:900;color:#666;background:#f3f4f6;padding:2px 8px;border-radius:999px}
+    .actions{display:flex;gap:8px;flex-wrap:wrap}
   </style>
 </head>
+
 <body>
   <header>
-    <h1>E4 Skellefteå → Stockholm</h1>
+    <h1 id="title">Vägväder</h1>
 
     <div class="row">
+      <select id="route"></select>
       <input id="start" type="time" value="10:00" />
       <input id="speed" type="number" value="85" min="30" max="130" step="1" style="width:92px" />
       <button onclick="load()">Uppdatera</button>
     </div>
 
+    <div class="row" style="margin-top:8px;">
+      <div class="actions">
+        <a id="wazeBtn" class="btn" href="#" target="_blank" rel="noopener">Öppna i Waze (mål)</a>
+        <a id="wazeNextBtn" class="btn" href="#" target="_blank" rel="noopener">Waze: nästa delsträcka</a>
+        <a id="gmapBtn" class="btn" href="#" target="_blank" rel="noopener">Öppna i Google Maps</a>
+        <button id="resetLegBtn" class="btn" type="button">Återställ etapp</button>
+      </div>
+    </div>
+
     <div class="small">
-      Starttid (HH:MM) + snitthastighet (km/h) → visar ETA och prognos vid ankomst per punkt.
-      <br>
-      <span id="meta">–</span>
+      Visar: NU-väder + ETA (fasta km) med nederbörd, vind och risk.
+      <br><span id="meta">–</span>
     </div>
   </header>
 
-  <div class="wrap" id="c"></div>
+  <div class="layout">
+    <div id="map"></div>
+    <div id="c"></div>
+  </div>
 
   <script>
     function pillClass(r){
@@ -56,17 +78,152 @@
       if(typeof n !== "number" || Number.isNaN(n)) return "–";
       return n.toFixed(d);
     }
+    function markerColor(risk){
+      if(risk==="RÖD") return "#b00020";
+      if(risk==="GUL") return "#b36b00";
+      return "#1b7f3a";
+    }
+
+    // ===== Leaflet map =====
+    const map = L.map("map", { scrollWheelZoom: true });
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 18,
+      attribution: "&copy; OpenStreetMap"
+    }).addTo(map);
+
+    const layer = L.layerGroup().addTo(map);
+
+    function renderMap(points){
+      layer.clearLayers();
+      if(!points || !points.length) return;
+
+      const latlngs = points.map(p => [p.lat, p.lon]);
+      L.polyline(latlngs, { weight: 4, opacity: 0.6 }).addTo(layer);
+
+      points.forEach(p => {
+        const m = L.circleMarker([p.lat, p.lon], {
+          radius: 9,
+          color: markerColor(p.eta.risk),
+          weight: 2,
+          fillColor: markerColor(p.eta.risk),
+          fillOpacity: 0.25
+        }).addTo(layer);
+
+        const popup = `
+          <div style="font-family:system-ui;min-width:220px;">
+            <div><b>${p.name}</b> <span style="font-weight:800;">(${fmt(p.km_from_start,0)} km)</span></div>
+            <div style="margin-top:6px;"><b>ETA ${p.eta.clock}</b> – <b>${p.eta.risk}</b></div>
+            <div>Temp: ${fmt(p.eta.t)}°C</div>
+            <div>Nederbörd: ${fmt(p.eta.p)} mm</div>
+            <div>Vind: ${fmt(p.eta.w)} m/s</div>
+            <div style="margin-top:6px;color:#666;font-size:12px;">${p.eta.reason || ""}</div>
+          </div>
+        `;
+        m.bindPopup(popup);
+      });
+
+      const bounds = L.latLngBounds(latlngs);
+      map.fitBounds(bounds.pad(0.2));
+    }
+
+    // ===== Etapp-hantering för Waze =====
+    function getLegKey() {
+      const route = document.getElementById("route").value || "E4_SKEL_STH";
+      return `legIndex:${route}`;
+    }
+    function getLegIndex() {
+      const v = localStorage.getItem(getLegKey());
+      const n = v ? parseInt(v, 10) : 0;
+      return Number.isFinite(n) ? n : 0;
+    }
+    function setLegIndex(i) {
+      localStorage.setItem(getLegKey(), String(i));
+    }
+
+    // ===== Navigation links =====
+    function setNavLinks(points){
+      const wazeBtn = document.getElementById("wazeBtn");
+      const wazeNextBtn = document.getElementById("wazeNextBtn");
+      const gmapBtn = document.getElementById("gmapBtn");
+
+      if(!points || points.length < 2){
+        wazeBtn.href = "#";
+        wazeNextBtn.href = "#";
+        gmapBtn.href = "#";
+        return;
+      }
+
+      const origin = points[0];
+      const dest = points[points.length - 1];
+      const waypoints = points.slice(1, -1);
+
+      // Waze: mål (från din mobilposition)
+      wazeBtn.href = `https://waze.com/ul?ll=${dest.lat},${dest.lon}&navigate=yes`;
+
+      // Google Maps: origin + destination + waypoints
+      const wp = waypoints.map(p => `${p.lat},${p.lon}`).join("|");
+      let url = `https://www.google.com/maps/dir/?api=1&origin=${origin.lat},${origin.lon}&destination=${dest.lat},${dest.lon}&travelmode=driving`;
+      if(wp) url += `&waypoints=${encodeURIComponent(wp)}`;
+      gmapBtn.href = url;
+
+      // Waze: nästa delsträcka (etapp i -> i+1)
+      let leg = getLegIndex();
+      if (leg < 0) leg = 0;
+      if (leg > points.length - 2) leg = points.length - 2;
+
+      const a = points[leg];
+      const b = points[leg + 1];
+
+      wazeNextBtn.href = `https://waze.com/ul?ll=${b.lat},${b.lon}&navigate=yes`;
+      wazeNextBtn.textContent = `Waze: ${a.name} → ${b.name}`;
+
+      wazeNextBtn.onclick = () => {
+        let current = getLegIndex();
+        if (current < points.length - 2) {
+          setLegIndex(current + 1);
+        } else {
+          setLegIndex(0);
+        }
+      };
+    }
+
+    // ===== API =====
+    async function loadRoutes(){
+      const r = await fetch("/api/routes");
+      const d = await r.json();
+      const sel = document.getElementById("route");
+      sel.innerHTML = "";
+      d.routes.forEach(x=>{
+        const o = document.createElement("option");
+        o.value = x.id;
+        o.textContent = x.label;
+        sel.appendChild(o);
+      });
+    }
 
     async function load(){
+      const route = document.getElementById("route").value || "E4_SKEL_STH";
       const start = document.getElementById("start").value || "10:00";
       const speed = document.getElementById("speed").value || "85";
 
-      const res = await fetch(`/api/status?start=${encodeURIComponent(start)}&speed=${encodeURIComponent(speed)}`, { cache: "no-store" });
+      const res = await fetch(`/api/status?route=${encodeURIComponent(route)}&start=${encodeURIComponent(start)}&speed=${encodeURIComponent(speed)}`, { cache: "no-store" });
       const d = await res.json();
 
+      document.getElementById("title").textContent = d.route_label;
       document.getElementById("meta").innerText =
         `Senast data: ${new Date(d.updated).toLocaleString()} · Start: ${new Date(d.start).toLocaleTimeString().slice(0,5)} · Snitt: ${d.speed_kmh} km/h`;
 
+      // Karta + knappar
+      setNavLinks(d.points);
+      renderMap(d.points);
+
+      // Återställ etapp
+      document.getElementById("resetLegBtn").onclick = () => {
+        setLegIndex(0);
+        setNavLinks(d.points);
+      };
+
+      // Kort
       const c = document.getElementById("c");
       c.innerHTML = "";
 
@@ -76,7 +233,7 @@
 
         el.innerHTML = `
           <div class="top">
-            <div class="name">${p.name}</div>
+            <div class="name">${p.name} <span class="muted">(${fmt(p.km_from_start,0)} km)</span></div>
             <div class="${pillClass(p.eta.risk)}">${p.eta.risk}</div>
           </div>
 
@@ -90,7 +247,7 @@
             <div class="divider"></div>
 
             <div class="line"><span class="badge">ETA</span>
-              <span class="muted"> Tid</span> <b>${(p.eta.time || "").slice(11,16)}</b> ·
+              <span class="muted"> Tid</span> <b>${p.eta.clock}</b> ·
               <span class="muted"> Temp</span> <b>${fmt(p.eta.t)}°C</b> ·
               <span class="muted"> Nederbörd</span> <b>${fmt(p.eta.p)} mm</b> ·
               <span class="muted"> Vind</span> <b>${fmt(p.eta.w)} m/s</b>
@@ -99,13 +256,15 @@
             <div class="line muted">Orsak: ${p.eta.reason || "–"}</div>
           </div>
         `;
-
         c.appendChild(el);
       });
     }
 
-    load();
-    setInterval(load, 30000);
+    (async ()=>{
+      await loadRoutes();
+      await load();
+      setInterval(load, 30000);
+    })();
   </script>
 </body>
 </html>
